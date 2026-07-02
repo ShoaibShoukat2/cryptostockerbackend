@@ -124,7 +124,7 @@ REFERRAL_BONUS_RATE = float(os.getenv('REFERRAL_BONUS_RATE', '0.05'))
 # Binance API (public endpoints work without keys)
 BINANCE_API_KEY = os.getenv('BINANCE_API_KEY', '')
 BINANCE_API_SECRET = os.getenv('BINANCE_API_SECRET', '')
-BINANCE_BASE_URL = os.getenv('BINANCE_BASE_URL', 'https://api.binance.com/api/v3')
+BINANCE_BASE_URL = os.getenv('BINANCE_BASE_URL', 'https://data-api.binance.vision/api/v3')
 BINANCE_SYMBOL = os.getenv('BINANCE_SYMBOL', 'BTCUSDT')
 
 # Email (optional)
