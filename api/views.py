@@ -85,6 +85,13 @@ class DashboardView(views.APIView):
 
         btc_equivalent = float(profile.available_balance / btc_price) if btc_price else 0
 
+        today_start = timezone.now().replace(hour=0, minute=0, second=0, microsecond=0)
+        today_profit = (
+            StackLog.objects.filter(user=request.user, created_at__gte=today_start)
+            .aggregate(total=Sum('profit_earned'))['total']
+            or Decimal('0')
+        )
+
         return Response({
             'profile': UserProfileSerializer(profile).data,
             'pending_deposits': {
@@ -98,6 +105,7 @@ class DashboardView(views.APIView):
             'referral_levels': referral_levels,
             'referral_tier': tier['level'],
             'profit_percent': tier['profit_percent'],
+            'today_profit': float(today_profit),
             'daily_bonus': get_daily_bonus_status(profile),
             'stats_trends': build_stats_trends(request.user),
             'btc_equivalent': round(btc_equivalent, 6),
