@@ -91,6 +91,8 @@ USE_I18N = True
 USE_TZ = True
 
 STATIC_URL = 'static/'
+MEDIA_URL = '/media/'
+MEDIA_ROOT = BASE_DIR / 'media'
 DEFAULT_AUTO_FIELD = 'django.db.models.BigAutoField'
 
 _cors_origins = os.getenv('CORS_ALLOWED_ORIGINS', '')
@@ -118,8 +120,13 @@ SIMPLE_JWT = {
     ),
 }
 
-STACK_DAILY_PROFIT_RATE = float(os.getenv('STACK_DAILY_PROFIT_RATE', '0.02'))
-REFERRAL_BONUS_RATE = float(os.getenv('REFERRAL_BONUS_RATE', '0.05'))
+STACK_DAILY_PROFIT_RATE = float(os.getenv('STACK_DAILY_PROFIT_RATE', '0.014'))
+REFERRAL_BONUS_RATE = float(os.getenv('REFERRAL_BONUS_RATE', '0.12'))
+MIN_DEPOSIT = float(os.getenv('MIN_DEPOSIT', '100'))
+MIN_WITHDRAW = float(os.getenv('MIN_WITHDRAW', '20'))
+INVESTMENT_LOCK_DAYS = int(os.getenv('INVESTMENT_LOCK_DAYS', '7'))
+DAILY_BONUS_AMOUNT = float(os.getenv('DAILY_BONUS_AMOUNT', '15'))
+DAILY_BONUS_REFERRALS = int(os.getenv('DAILY_BONUS_REFERRALS', '3'))
 
 # Binance API (public endpoints work without keys)
 BINANCE_API_KEY = os.getenv('BINANCE_API_KEY', '')

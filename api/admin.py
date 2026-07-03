@@ -1,18 +1,25 @@
 from django.contrib import admin
-from django.contrib.auth.models import User
-from .models import UserProfile, Deposit, Withdrawal, StackLog, Transaction, Notification
+from .models import (
+    UserProfile, Deposit, Withdrawal, StackLog, Transaction,
+    Notification, SiteConfig, InvestmentLock, DailyReferralTracker,
+)
+
+
+@admin.register(SiteConfig)
+class SiteConfigAdmin(admin.ModelAdmin):
+    list_display = ['bep20_address', 'trc20_address', 'telegram_link', 'updated_at']
 
 
 @admin.register(UserProfile)
 class UserProfileAdmin(admin.ModelAdmin):
-    list_display = ['user', 'vip_level', 'available_balance', 'total_balance', 'referral_code']
+    list_display = ['user', 'referral_code', 'vip_level', 'available_balance', 'locked_investment', 'total_deposit']
     search_fields = ['user__username', 'referral_code']
 
 
 @admin.register(Deposit)
 class DepositAdmin(admin.ModelAdmin):
-    list_display = ['user', 'amount', 'status', 'created_at']
-    list_filter = ['status']
+    list_display = ['user', 'amount', 'network', 'status', 'created_at']
+    list_filter = ['status', 'network']
 
 
 @admin.register(Withdrawal)
@@ -24,6 +31,5 @@ class WithdrawalAdmin(admin.ModelAdmin):
 admin.site.register(StackLog)
 admin.site.register(Transaction)
 admin.site.register(Notification)
-
-admin.site.site_header = 'Crypto Stacker Admin'
-admin.site.site_title = 'Crypto Stacker'
+admin.site.register(InvestmentLock)
+admin.site.register(DailyReferralTracker)

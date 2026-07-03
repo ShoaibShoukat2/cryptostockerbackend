@@ -3,20 +3,27 @@ from django.conf import settings
 from django.contrib.auth.models import User
 from django.db.models import Sum, Count, Q
 from django.utils import timezone
-from rest_framework import generics, status, views
+from rest_framework import generics, status, views, parsers
 from rest_framework.permissions import AllowAny, IsAdminUser, IsAuthenticated
 from rest_framework.response import Response
 from rest_framework_simplejwt.tokens import RefreshToken
 
-from .models import UserProfile, Deposit, Withdrawal, StackLog, Transaction, Notification
+from .models import (
+    UserProfile, Deposit, Withdrawal, StackLog, Transaction,
+    Notification, SiteConfig,
+)
 from .market_service import get_btc_market, get_btc_price
 from .utils import build_stats_trends, build_referral_levels
+from .business_logic import (
+    get_profit_rate, get_user_tier, get_withdrawable_balance,
+    create_investment_lock, get_daily_bonus_status, release_expired_locks,
+)
 from .serializers import (
     RegisterSerializer, UserProfileSerializer, DepositSerializer,
     WithdrawalSerializer, StackLogSerializer, TransactionSerializer,
     NotificationSerializer, AdminUserSerializer, AdminDepositSerializer,
     AdminWithdrawalSerializer, AdminTransactionSerializer,
-    AdminUserUpdateSerializer, AdminNotifySerializer,
+    AdminUserUpdateSerializer, AdminNotifySerializer, SiteConfigSerializer,
 )
 
 
@@ -48,13 +55,25 @@ class ProfileView(generics.RetrieveAPIView):
         return self.request.user.profile
 
 
+class SiteConfigView(views.APIView):
+    permission_classes = [AllowAny]
+
+    def get(self, request):
+        config = SiteConfig.load()
+        return Response(SiteConfigSerializer(config).data)
+
+
 class DashboardView(views.APIView):
     def get(self, request):
         profile = request.user.profile
+        release_expired_locks(profile)
+        profile.refresh_from_db()
+
         pending_deposits = Deposit.objects.filter(user=request.user, status='pending')
         pending_withdrawals = Withdrawal.objects.filter(user=request.user, status='pending')
-
         referral_levels = build_referral_levels(profile)
+        tier = get_user_tier(profile)
+        config = SiteConfig.load()
 
         try:
             btc_price = get_btc_price()
@@ -77,11 +96,20 @@ class DashboardView(views.APIView):
                 'count': pending_withdrawals.count(),
             },
             'referral_levels': referral_levels,
+            'referral_tier': tier['level'],
+            'profit_percent': tier['profit_percent'],
+            'daily_bonus': get_daily_bonus_status(profile),
             'stats_trends': build_stats_trends(request.user),
             'btc_equivalent': round(btc_equivalent, 6),
             'btc_price': float(btc_price),
             'btc_change': btc_change,
             'unread_notifications': Notification.objects.filter(user=request.user, is_read=False).count(),
+            'site_config': {
+                'min_deposit': float(config.min_deposit),
+                'min_withdraw': float(config.min_withdraw),
+                'referral_commission_percent': float(config.referral_commission_rate * 100),
+                'investment_lock_days': config.investment_lock_days,
+            },
         })
 
 
@@ -93,20 +121,23 @@ class StackView(views.APIView):
                 {'error': 'You can only stack once every 24 hours.'},
                 status=status.HTTP_400_BAD_REQUEST,
             )
-        if profile.available_balance <= 0:
+        if profile.total_balance <= 0:
             return Response(
                 {'error': 'Insufficient balance to stack.'},
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
-        profit_rate = Decimal(str(settings.STACK_DAILY_PROFIT_RATE))
-        stack_amount = profile.available_balance
-        profit = stack_amount * profit_rate
+        tier = get_user_tier(profile)
+        profit_rate = tier['profit_rate']
+        previous_balance = profile.total_balance
+        stack_amount = previous_balance
+        profit = (stack_amount * profit_rate).quantize(Decimal('0.01'))
 
         StackLog.objects.create(
             user=request.user,
             amount=stack_amount,
             profit_earned=profit,
+            profit_rate=profit_rate,
         )
         profile.total_profit += profit
         profile.total_balance += profit
@@ -117,23 +148,41 @@ class StackView(views.APIView):
         Transaction.objects.create(
             user=request.user,
             type='stack',
-            amount=stack_amount,
-            description=f'Stacked balance - earned ${profit:.2f} profit',
+            amount=profit,
+            description=f'Stacked ${stack_amount:.2f} at {tier["profit_percent"]} — earned ${profit:.2f}',
         )
+
+        stack_data = {
+            'stack_amount': float(stack_amount),
+            'profit_earned': float(profit),
+            'profit_rate': float(profit_rate),
+            'profit_percent': tier['profit_percent'],
+            'previous_balance': float(previous_balance),
+            'new_balance': float(profile.total_balance),
+            'referral_tier': tier['level'],
+        }
+
         Notification.objects.create(
             user=request.user,
             title='Stack Successful',
-            message=f'You stacked ${stack_amount:.2f} and earned ${profit:.2f} profit!',
+            message=(
+                f'You stacked ${stack_amount:.2f} and earned ${profit:.2f} '
+                f'({tier["profit_percent"]} daily profit).'
+            ),
+            notification_type='stack',
+            extra_data=stack_data,
         )
 
         return Response({
-            'message': f'Successfully stacked! You earned ${profit:.2f} profit.',
+            'message': f'Successfully stacked! You earned ${profit:.2f} profit ({tier["profit_percent"]}).',
+            'stack_result': stack_data,
             'profile': UserProfileSerializer(profile).data,
         })
 
 
 class DepositCreateView(generics.CreateAPIView):
     serializer_class = DepositSerializer
+    parser_classes = [parsers.MultiPartParser, parsers.FormParser, parsers.JSONParser]
 
     def perform_create(self, serializer):
         deposit = serializer.save(user=self.request.user)
@@ -141,12 +190,13 @@ class DepositCreateView(generics.CreateAPIView):
             user=self.request.user,
             type='deposit',
             amount=deposit.amount,
-            description=f'Deposit request - {deposit.transaction_id}',
+            description=f'Deposit request ({deposit.network}) - {deposit.transaction_id}',
         )
         Notification.objects.create(
             user=self.request.user,
             title='Deposit Submitted',
-            message=f'Your deposit request of ${deposit.amount} has been submitted and is pending review.',
+            message=f'Your deposit request of ${deposit.amount} via {deposit.network} is pending review.',
+            notification_type='deposit',
         )
 
 
@@ -155,12 +205,31 @@ class WithdrawalCreateView(generics.CreateAPIView):
 
     def create(self, request, *args, **kwargs):
         profile = request.user.profile
+        release_expired_locks(profile)
+        profile.refresh_from_db()
+
         amount = Decimal(str(request.data.get('amount', 0)))
-        if amount > profile.available_balance:
+        withdrawable = get_withdrawable_balance(profile)
+
+        if Withdrawal.objects.filter(user=request.user, status='pending').exists():
             return Response(
-                {'error': 'Insufficient balance.'},
+                {'error': 'You already have a pending withdrawal. Wait until it is completed.'},
                 status=status.HTTP_400_BAD_REQUEST,
             )
+
+        if amount > withdrawable:
+            locked = profile.locked_investment
+            return Response(
+                {
+                    'error': (
+                        f'Insufficient withdrawable balance. '
+                        f'Available: ${withdrawable:.2f}. '
+                        f'${locked:.2f} is locked for {SiteConfig.load().investment_lock_days} days.'
+                    ),
+                },
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
         return super().create(request, *args, **kwargs)
 
     def perform_create(self, serializer):
@@ -174,7 +243,11 @@ class WithdrawalCreateView(generics.CreateAPIView):
         Notification.objects.create(
             user=self.request.user,
             title='Withdrawal Submitted',
-            message=f'Your withdrawal request of ${withdrawal.amount} has been submitted and is pending review.',
+            message=(
+                f'Your withdrawal of ${withdrawal.amount} has been submitted. '
+                f'Processing time: 24–72 hours.'
+            ),
+            notification_type='withdraw',
         )
 
 
@@ -199,6 +272,13 @@ class WithdrawalListView(generics.ListAPIView):
         return Withdrawal.objects.filter(user=self.request.user)
 
 
+class StackLogListView(generics.ListAPIView):
+    serializer_class = StackLogSerializer
+
+    def get_queryset(self):
+        return StackLog.objects.filter(user=self.request.user)[:20]
+
+
 class NotificationListView(generics.ListAPIView):
     serializer_class = NotificationSerializer
 
@@ -212,7 +292,7 @@ class MarkNotificationReadView(views.APIView):
             notification = Notification.objects.get(pk=pk, user=request.user)
             notification.is_read = True
             notification.save()
-            return Response({'message': 'Marked as read.'})
+            return Response({'message': 'Marked as read.', 'notification': NotificationSerializer(notification).data})
         except Notification.DoesNotExist:
             return Response({'error': 'Not found.'}, status=status.HTTP_404_NOT_FOUND)
 
@@ -224,7 +304,7 @@ class MarketDataView(views.APIView):
         timeframe = request.query_params.get('timeframe', '15m')
         try:
             return Response(get_btc_market(timeframe=timeframe))
-        except Exception as exc:
+        except Exception:
             return Response(
                 {'error': 'Unable to fetch live market data. Please try again later.'},
                 status=status.HTTP_503_SERVICE_UNAVAILABLE,
@@ -245,13 +325,14 @@ class AdminDashboardView(views.APIView):
         pending_withdrawal_amount = Withdrawal.objects.filter(status='pending').aggregate(Sum('amount'))['amount__sum'] or 0
 
         recent_deposits = AdminDepositSerializer(
-            Deposit.objects.all().select_related('user').order_by('-created_at')[:5], many=True
+            Deposit.objects.all().select_related('user').order_by('-created_at')[:5],
+            many=True, context={'request': request},
         ).data
         recent_withdrawals = AdminWithdrawalSerializer(
-            Withdrawal.objects.all().select_related('user').order_by('-created_at')[:5], many=True
+            Withdrawal.objects.all().select_related('user').order_by('-created_at')[:5], many=True,
         ).data
         recent_users = AdminUserSerializer(
-            User.objects.filter(is_staff=False).select_related('profile').order_by('-date_joined')[:5], many=True
+            User.objects.filter(is_staff=False).select_related('profile').order_by('-date_joined')[:5], many=True,
         ).data
 
         return Response({
@@ -263,12 +344,26 @@ class AdminDashboardView(views.APIView):
             'pending_deposit_amount': float(pending_deposit_amount),
             'pending_withdrawal_amount': float(pending_withdrawal_amount),
             'total_profit_paid': float(
-                UserProfile.objects.aggregate(Sum('total_profit'))['total_profit__sum'] or 0
+                UserProfile.objects.aggregate(Sum('total_profit'))['total_profit__sum'] or 0,
             ),
             'recent_deposits': recent_deposits,
             'recent_withdrawals': recent_withdrawals,
             'recent_users': recent_users,
         })
+
+
+class AdminSiteConfigView(views.APIView):
+    permission_classes = [IsAdminUser]
+
+    def get(self, request):
+        return Response(SiteConfigSerializer(SiteConfig.load()).data)
+
+    def patch(self, request):
+        config = SiteConfig.load()
+        serializer = SiteConfigSerializer(config, data=request.data, partial=True)
+        serializer.is_valid(raise_exception=True)
+        serializer.save()
+        return Response(serializer.data)
 
 
 class AdminUserListView(generics.ListAPIView):
@@ -281,6 +376,9 @@ class AdminDepositListView(generics.ListAPIView):
     permission_classes = [IsAdminUser]
     serializer_class = AdminDepositSerializer
     queryset = Deposit.objects.all().select_related('user')
+
+    def get_serializer_context(self):
+        return {'request': self.request}
 
 
 class AdminWithdrawalListView(generics.ListAPIView):
@@ -305,9 +403,13 @@ class AdminApproveDepositView(views.APIView):
             profile.total_deposit += deposit.amount
             profile.save()
 
+            create_investment_lock(deposit.user, deposit.amount)
+
+            config = SiteConfig.load()
+            commission_rate = config.referral_commission_rate or Decimal(str(settings.REFERRAL_BONUS_RATE))
+
             if profile.referred_by:
-                bonus_rate = Decimal(str(settings.REFERRAL_BONUS_RATE))
-                bonus = deposit.amount * bonus_rate
+                bonus = (deposit.amount * commission_rate).quantize(Decimal('0.01'))
                 referrer_profile = profile.referred_by
                 referrer_profile.available_balance += bonus
                 referrer_profile.total_balance += bonus
@@ -317,18 +419,23 @@ class AdminApproveDepositView(views.APIView):
                     user=referrer_profile.user,
                     type='referral',
                     amount=bonus,
-                    description=f'Level 1 referral bonus from {deposit.user.username}',
+                    description=f'Referral commission ({float(commission_rate * 100):.0f}%) from {deposit.user.username}',
                 )
                 Notification.objects.create(
                     user=referrer_profile.user,
-                    title='Referral Bonus Earned',
-                    message=f'You earned ${bonus:.2f} referral bonus from a deposit.',
+                    title='Referral Commission Earned',
+                    message=f'You earned ${bonus:.2f} commission from a ${deposit.amount} deposit.',
+                    notification_type='referral',
                 )
 
             Notification.objects.create(
                 user=deposit.user,
                 title='Deposit Approved',
-                message=f'Your deposit of ${deposit.amount} has been approved.',
+                message=(
+                    f'Your deposit of ${deposit.amount} has been approved. '
+                    f'Investment is locked for {config.investment_lock_days} days.'
+                ),
+                notification_type='deposit',
             )
             return Response({'message': 'Deposit approved.'})
         except Deposit.DoesNotExist:
@@ -347,6 +454,7 @@ class AdminRejectDepositView(views.APIView):
                 user=deposit.user,
                 title='Deposit Rejected',
                 message=f'Your deposit of ${deposit.amount} has been rejected.',
+                notification_type='deposit',
             )
             return Response({'message': 'Deposit rejected.'})
         except Deposit.DoesNotExist:
@@ -362,17 +470,20 @@ class AdminApproveWithdrawalView(views.APIView):
             if withdrawal.status != 'pending':
                 return Response({'error': 'Already processed.'}, status=status.HTTP_400_BAD_REQUEST)
             profile = withdrawal.user.profile
-            if withdrawal.amount > profile.available_balance:
-                return Response({'error': 'User has insufficient balance.'}, status=status.HTTP_400_BAD_REQUEST)
+            release_expired_locks(profile)
+            if withdrawal.amount > get_withdrawable_balance(profile):
+                return Response({'error': 'User has insufficient withdrawable balance.'}, status=status.HTTP_400_BAD_REQUEST)
             withdrawal.status = 'approved'
             withdrawal.save()
             profile.available_balance -= withdrawal.amount
+            profile.total_balance -= withdrawal.amount
             profile.total_withdraw += withdrawal.amount
             profile.save()
             Notification.objects.create(
                 user=withdrawal.user,
                 title='Withdrawal Approved',
-                message=f'Your withdrawal of ${withdrawal.amount} has been approved.',
+                message=f'Your withdrawal of ${withdrawal.amount} has been approved and sent.',
+                notification_type='withdraw',
             )
             return Response({'message': 'Withdrawal approved.'})
         except Withdrawal.DoesNotExist:
@@ -391,6 +502,7 @@ class AdminRejectWithdrawalView(views.APIView):
                 user=withdrawal.user,
                 title='Withdrawal Rejected',
                 message=f'Your withdrawal of ${withdrawal.amount} has been rejected.',
+                notification_type='withdraw',
             )
             return Response({'message': 'Withdrawal rejected.'})
         except Withdrawal.DoesNotExist:
@@ -408,14 +520,14 @@ class AdminUserDetailView(views.APIView):
 
     def get(self, request, pk):
         try:
-            user = User.objects.filter(is_staff=False).select_related('profile').get(pk=pk)
+            user = User.objects.select_related('profile').get(pk=pk)
             return Response(AdminUserSerializer(user).data)
         except User.DoesNotExist:
             return Response({'error': 'User not found.'}, status=status.HTTP_404_NOT_FOUND)
 
     def patch(self, request, pk):
         try:
-            user = User.objects.filter(is_staff=False).get(pk=pk)
+            user = User.objects.get(pk=pk)
         except User.DoesNotExist:
             return Response({'error': 'User not found.'}, status=status.HTTP_404_NOT_FOUND)
 
@@ -426,6 +538,10 @@ class AdminUserDetailView(views.APIView):
 
         if 'is_active' in data:
             user.is_active = data['is_active']
+            user.save()
+
+        if 'is_staff' in data and request.user.is_superuser:
+            user.is_staff = data['is_staff']
             user.save()
 
         if 'vip_level' in data:
@@ -458,7 +574,7 @@ class AdminNotifyUserView(views.APIView):
 
     def post(self, request, pk):
         try:
-            user = User.objects.get(pk=pk, is_staff=False)
+            user = User.objects.get(pk=pk)
         except User.DoesNotExist:
             return Response({'error': 'User not found.'}, status=status.HTTP_404_NOT_FOUND)
 

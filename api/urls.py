@@ -8,7 +8,9 @@ urlpatterns = [
     path('auth/refresh/', TokenRefreshView.as_view(), name='token_refresh'),
     path('profile/', views.ProfileView.as_view(), name='profile'),
     path('dashboard/', views.DashboardView.as_view(), name='dashboard'),
+    path('config/', views.SiteConfigView.as_view(), name='site-config'),
     path('stack/', views.StackView.as_view(), name='stack'),
+    path('stack/logs/', views.StackLogListView.as_view(), name='stack-logs'),
     path('deposits/', views.DepositCreateView.as_view(), name='deposit-create'),
     path('deposits/list/', views.DepositListView.as_view(), name='deposit-list'),
     path('withdrawals/', views.WithdrawalCreateView.as_view(), name='withdrawal-create'),
@@ -19,6 +21,7 @@ urlpatterns = [
     path('market/', views.MarketDataView.as_view(), name='market'),
     # Admin
     path('admin/dashboard/', views.AdminDashboardView.as_view(), name='admin-dashboard'),
+    path('admin/config/', views.AdminSiteConfigView.as_view(), name='admin-config'),
     path('admin/users/', views.AdminUserListView.as_view(), name='admin-users'),
     path('admin/deposits/', views.AdminDepositListView.as_view(), name='admin-deposits'),
     path('admin/withdrawals/', views.AdminWithdrawalListView.as_view(), name='admin-withdrawals'),

@@ -13,17 +13,52 @@ def generate_referral_code():
     return ''.join(random.choices(string.ascii_uppercase + string.digits, k=6))
 
 
+class SiteConfig(models.Model):
+    """Singleton platform settings — editable by admin/operator."""
+    bep20_address = models.CharField(max_length=255, blank=True, default='')
+    trc20_address = models.CharField(max_length=255, blank=True, default='')
+    telegram_link = models.CharField(max_length=255, blank=True, default='https://t.me/cryptostacker')
+    min_deposit = models.DecimalField(max_digits=12, decimal_places=2, default=Decimal('100.00'))
+    min_withdraw = models.DecimalField(max_digits=12, decimal_places=2, default=Decimal('20.00'))
+    referral_commission_rate = models.DecimalField(max_digits=5, decimal_places=4, default=Decimal('0.12'))
+    daily_bonus_amount = models.DecimalField(max_digits=12, decimal_places=2, default=Decimal('15.00'))
+    daily_bonus_referrals = models.IntegerField(default=3)
+    investment_lock_days = models.IntegerField(default=7)
+    about_text = models.TextField(blank=True, default=(
+        'Crypto Stacker is a professional crypto trading platform. '
+        'We invest your deposits in crypto trading markets and share daily profits with you. '
+        'Stack your balance every 24 hours to earn tier-based returns on your total balance.'
+    ))
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        verbose_name = 'Site Configuration'
+
+    def save(self, *args, **kwargs):
+        self.pk = 1
+        super().save(*args, **kwargs)
+
+    @classmethod
+    def load(cls):
+        obj, _ = cls.objects.get_or_create(pk=1)
+        return obj
+
+    def __str__(self):
+        return 'Site Configuration'
+
+
 class UserProfile(models.Model):
     VIP_LEVELS = [(i, f'VIP {i}') for i in range(1, 6)]
 
     user = models.OneToOneField(User, on_delete=models.CASCADE, related_name='profile')
     referral_code = models.CharField(max_length=10, unique=True, default=generate_referral_code)
     referred_by = models.ForeignKey(
-        'self', on_delete=models.SET_NULL, null=True, blank=True, related_name='referrals'
+        'self', on_delete=models.SET_NULL, null=True, blank=True, related_name='referrals',
     )
     vip_level = models.IntegerField(choices=VIP_LEVELS, default=1)
     available_balance = models.DecimalField(max_digits=12, decimal_places=2, default=Decimal('0.00'))
     total_balance = models.DecimalField(max_digits=12, decimal_places=2, default=Decimal('0.00'))
+    locked_investment = models.DecimalField(max_digits=12, decimal_places=2, default=Decimal('0.00'))
     total_deposit = models.DecimalField(max_digits=12, decimal_places=2, default=Decimal('0.00'))
     total_withdraw = models.DecimalField(max_digits=12, decimal_places=2, default=Decimal('0.00'))
     total_profit = models.DecimalField(max_digits=12, decimal_places=2, default=Decimal('0.00'))
@@ -63,15 +98,42 @@ def create_user_profile(sender, instance, created, **kwargs):
         UserProfile.objects.create(user=instance)
 
 
+class InvestmentLock(models.Model):
+    user = models.ForeignKey(User, on_delete=models.CASCADE, related_name='investment_locks')
+    amount = models.DecimalField(max_digits=12, decimal_places=2)
+    unlock_at = models.DateTimeField()
+    released = models.BooleanField(default=False)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ['unlock_at']
+
+
+class DailyReferralTracker(models.Model):
+    user = models.ForeignKey(User, on_delete=models.CASCADE, related_name='daily_referral_trackers')
+    date = models.DateField()
+    referral_count = models.IntegerField(default=0)
+    bonus_awarded = models.BooleanField(default=False)
+
+    class Meta:
+        unique_together = ['user', 'date']
+
+
 class Deposit(models.Model):
     STATUS_CHOICES = [
         ('pending', 'Pending'),
         ('approved', 'Approved'),
         ('rejected', 'Rejected'),
     ]
+    NETWORK_CHOICES = [
+        ('BEP20', 'BEP20'),
+        ('TRC20', 'TRC20'),
+    ]
 
     user = models.ForeignKey(User, on_delete=models.CASCADE, related_name='deposits')
     amount = models.DecimalField(max_digits=12, decimal_places=2)
+    network = models.CharField(max_length=10, choices=NETWORK_CHOICES, default='BEP20')
+    screenshot = models.ImageField(upload_to='deposits/', blank=True, null=True)
     status = models.CharField(max_length=20, choices=STATUS_CHOICES, default='pending')
     transaction_id = models.CharField(max_length=50, unique=True, default=uuid.uuid4)
     note = models.TextField(blank=True)
@@ -106,6 +168,7 @@ class StackLog(models.Model):
     user = models.ForeignKey(User, on_delete=models.CASCADE, related_name='stack_logs')
     amount = models.DecimalField(max_digits=12, decimal_places=2)
     profit_earned = models.DecimalField(max_digits=12, decimal_places=2, default=Decimal('0.00'))
+    profit_rate = models.DecimalField(max_digits=6, decimal_places=4, default=Decimal('0.014'))
     created_at = models.DateTimeField(auto_now_add=True)
 
     class Meta:
@@ -132,9 +195,20 @@ class Transaction(models.Model):
 
 
 class Notification(models.Model):
+    TYPE_CHOICES = [
+        ('general', 'General'),
+        ('stack', 'Stack Result'),
+        ('deposit', 'Deposit'),
+        ('withdraw', 'Withdraw'),
+        ('referral', 'Referral'),
+        ('bonus', 'Bonus'),
+    ]
+
     user = models.ForeignKey(User, on_delete=models.CASCADE, related_name='notifications')
     title = models.CharField(max_length=255)
     message = models.TextField()
+    notification_type = models.CharField(max_length=20, choices=TYPE_CHOICES, default='general')
+    extra_data = models.JSONField(null=True, blank=True)
     is_read = models.BooleanField(default=False)
     created_at = models.DateTimeField(auto_now_add=True)
 

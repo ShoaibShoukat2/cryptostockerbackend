@@ -1,6 +1,7 @@
 from decimal import Decimal
 from django.db.models import Sum
-from .models import Transaction, UserProfile
+from .models import Transaction
+
 
 POINTS = 12
 
@@ -55,35 +56,5 @@ def build_stats_trends(user):
 
 
 def build_referral_levels(profile):
-    direct_refs = UserProfile.objects.filter(referred_by=profile)
-    level2_profiles = UserProfile.objects.filter(referred_by__in=direct_refs)
-
-    return [
-        {
-            'level': 1,
-            'members': direct_refs.count(),
-            'earnings': float(
-                Transaction.objects.filter(
-                    user=profile.user, type='referral', description__icontains='Level 1'
-                ).aggregate(Sum('amount'))['amount__sum'] or 0
-            ),
-        },
-        {
-            'level': 2,
-            'members': level2_profiles.count(),
-            'earnings': float(
-                Transaction.objects.filter(
-                    user=profile.user, type='referral', description__icontains='Level 2'
-                ).aggregate(Sum('amount'))['amount__sum'] or 0
-            ),
-        },
-        {
-            'level': 3,
-            'members': UserProfile.objects.filter(referred_by__in=level2_profiles).count(),
-            'earnings': float(
-                Transaction.objects.filter(
-                    user=profile.user, type='referral', description__icontains='Level 3'
-                ).aggregate(Sum('amount'))['amount__sum'] or 0
-            ),
-        },
-    ]
+    from .business_logic import build_tier_levels
+    return build_tier_levels(profile)
