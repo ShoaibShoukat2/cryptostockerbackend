@@ -93,6 +93,9 @@ class UserProfile(models.Model):
     total_withdraw = models.DecimalField(max_digits=12, decimal_places=2, default=Decimal('0.00'))
     total_profit = models.DecimalField(max_digits=12, decimal_places=2, default=Decimal('0.00'))
     total_referral_bonus = models.DecimalField(max_digits=12, decimal_places=2, default=Decimal('0.00'))
+    extra_bonus_awarded = models.BooleanField(default=False)
+    extra_bonus_qualified_count = models.IntegerField(default=0)
+    referral_deposit_counted = models.BooleanField(default=False)
     last_stack_at = models.DateTimeField(null=True, blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
 
@@ -115,11 +118,16 @@ class UserProfile(models.Model):
 
     @property
     def total_referrals(self):
-        return self.referrals.count()
+        min_dep = SiteConfig.load().min_deposit or Decimal('100.00')
+        return self.referrals.filter(total_deposit__gte=min_dep).count()
 
     @property
     def active_referrals(self):
-        return self.referrals.filter(user__is_active=True).count()
+        min_dep = SiteConfig.load().min_deposit or Decimal('100.00')
+        return self.referrals.filter(
+            total_deposit__gte=min_dep,
+            user__is_active=True,
+        ).count()
 
 
 @receiver(post_save, sender=User)

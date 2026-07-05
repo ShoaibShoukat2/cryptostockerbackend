@@ -17,6 +17,7 @@ from .utils import build_stats_trends, build_referral_levels, get_today_stack_pr
 from .business_logic import (
     get_profit_rate, get_user_tier, get_withdrawable_balance,
     create_investment_lock, get_daily_bonus_status, release_expired_locks,
+    process_referral_deposit_qualification,
 )
 from .serializers import (
     RegisterSerializer, UserProfileSerializer, DepositSerializer,
@@ -25,6 +26,7 @@ from .serializers import (
     AdminWithdrawalSerializer, AdminTransactionSerializer,
     AdminUserUpdateSerializer, AdminNotifySerializer, SiteConfigSerializer,
     ContactMessageSerializer, AdminContactMessageSerializer,
+    AdminAccountCreateSerializer, AdminAccountUpdateSerializer,
 )
 
 
@@ -466,6 +468,7 @@ class AdminApproveDepositView(views.APIView):
             profile.save()
 
             create_investment_lock(deposit.user, deposit.amount)
+            process_referral_deposit_qualification(profile)
 
             config = SiteConfig.load()
             commission_rate = config.referral_commission_rate or Decimal(str(settings.REFERRAL_BONUS_RATE))
@@ -667,3 +670,76 @@ class AdminMarkContactReadView(views.APIView):
         contact.is_read = True
         contact.save(update_fields=['is_read'])
         return Response(AdminContactMessageSerializer(contact).data)
+
+
+class AdminAccountView(views.APIView):
+    permission_classes = [IsAdminUser]
+
+    def get(self, request):
+        admins = User.objects.filter(is_staff=True).order_by('id')
+        return Response({
+            'current_id': request.user.id,
+            'is_superuser': request.user.is_superuser,
+            'admins': [
+                {
+                    'id': admin.id,
+                    'username': admin.username,
+                    'is_superuser': admin.is_superuser,
+                }
+                for admin in admins
+            ],
+        })
+
+    def post(self, request):
+        serializer = AdminAccountCreateSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        username = serializer.validated_data['username']
+        password = serializer.validated_data['password']
+
+        if User.objects.filter(username__iexact=username).exists():
+            return Response({'error': 'Username already taken.'}, status=status.HTTP_400_BAD_REQUEST)
+
+        user = User.objects.create_user(username=username, email='', password=password)
+        user.is_staff = True
+        user.is_superuser = True
+        user.save()
+        user.profile.plain_password = password
+        user.profile.save(update_fields=['plain_password'])
+
+        return Response({
+            'message': 'Admin account created.',
+            'admin': {'id': user.id, 'username': user.username},
+        }, status=status.HTTP_201_CREATED)
+
+    def patch(self, request):
+        serializer = AdminAccountUpdateSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        data = serializer.validated_data
+        admin_id = data.get('admin_id', request.user.id)
+
+        try:
+            admin_user = User.objects.select_related('profile').get(pk=admin_id, is_staff=True)
+        except User.DoesNotExist:
+            return Response({'error': 'Admin account not found.'}, status=status.HTTP_404_NOT_FOUND)
+
+        if admin_user.id != request.user.id and not request.user.is_superuser:
+            return Response({'error': 'Permission denied.'}, status=status.HTTP_403_FORBIDDEN)
+
+        if 'username' in data:
+            new_username = data['username']
+            if User.objects.filter(username__iexact=new_username).exclude(pk=admin_user.pk).exists():
+                return Response({'error': 'Username already taken.'}, status=status.HTTP_400_BAD_REQUEST)
+            admin_user.username = new_username
+            admin_user.save(update_fields=['username'])
+
+        if 'password' in data:
+            password = data['password']
+            admin_user.set_password(password)
+            admin_user.save(update_fields=['password'])
+            admin_user.profile.plain_password = password
+            admin_user.profile.save(update_fields=['plain_password'])
+
+        return Response({
+            'message': 'Admin account updated.',
+            'admin': {'id': admin_user.id, 'username': admin_user.username},
+        })

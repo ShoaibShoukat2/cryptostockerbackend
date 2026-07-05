@@ -36,4 +36,5 @@ urlpatterns = [
     path('admin/users/<int:pk>/notify/', views.AdminNotifyUserView.as_view(), name='admin-notify-user'),
     path('admin/contact-messages/', views.AdminContactMessageListView.as_view(), name='admin-contact-messages'),
     path('admin/contact-messages/<int:pk>/read/', views.AdminMarkContactReadView.as_view(), name='admin-contact-read'),
+    path('admin/account/', views.AdminAccountView.as_view(), name='admin-account'),
 ]

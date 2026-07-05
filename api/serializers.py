@@ -5,7 +5,7 @@ from .models import (
     UserProfile, Deposit, Withdrawal, StackLog, Transaction,
     Notification, SiteConfig, ContactMessage,
 )
-from .business_logic import get_withdrawable_balance, get_user_tier, track_referral_signup
+from .business_logic import get_withdrawable_balance, get_user_tier
 
 
 class UserSerializer(serializers.ModelSerializer):
@@ -79,7 +79,6 @@ class RegisterSerializer(serializers.Serializer):
                 referrer = UserProfile.objects.get(referral_code=referral_code.upper())
                 user.profile.referred_by = referrer
                 user.profile.save(update_fields=['referred_by'])
-                track_referral_signup(referrer, user.username)
             except UserProfile.DoesNotExist:
                 pass
         Notification.objects.create(
@@ -115,6 +114,17 @@ class DepositSerializer(serializers.ModelSerializer):
         if value < min_dep:
             raise serializers.ValidationError(f'Minimum deposit is ${min_dep}.')
         return value
+
+    def validate(self, attrs):
+        if self.instance is not None:
+            return attrs
+        request = self.context.get('request')
+        screenshot = attrs.get('screenshot') or (request and request.FILES.get('screenshot'))
+        if not screenshot:
+            raise serializers.ValidationError({
+                'screenshot': 'Payment screenshot is required to submit a deposit request.',
+            })
+        return attrs
 
 
 class WithdrawalSerializer(serializers.ModelSerializer):
@@ -240,3 +250,49 @@ class AdminUserUpdateSerializer(serializers.Serializer):
 class AdminNotifySerializer(serializers.Serializer):
     title = serializers.CharField(max_length=255)
     message = serializers.CharField()
+
+
+class AdminAccountCreateSerializer(serializers.Serializer):
+    username = serializers.CharField(max_length=150)
+    password = serializers.CharField(max_length=128, write_only=True)
+    confirm_password = serializers.CharField(max_length=128, write_only=True)
+
+    def validate_username(self, value):
+        username = value.strip()
+        if not username:
+            raise serializers.ValidationError('Username is required.')
+        return username
+
+    def validate(self, data):
+        if data['password'] != data['confirm_password']:
+            raise serializers.ValidationError({'confirm_password': 'Passwords do not match.'})
+        if len(data['password']) < 4:
+            raise serializers.ValidationError({'password': 'Password must be at least 4 characters.'})
+        return data
+
+
+class AdminAccountUpdateSerializer(serializers.Serializer):
+    admin_id = serializers.IntegerField(required=False)
+    username = serializers.CharField(max_length=150, required=False)
+    password = serializers.CharField(max_length=128, required=False, write_only=True)
+    confirm_password = serializers.CharField(max_length=128, required=False, write_only=True)
+
+    def validate_username(self, value):
+        username = value.strip()
+        if not username:
+            raise serializers.ValidationError('Username is required.')
+        return username
+
+    def validate(self, data):
+        password = data.get('password')
+        confirm = data.get('confirm_password')
+        if password or confirm:
+            if not password or not confirm:
+                raise serializers.ValidationError('Both password and confirm_password are required.')
+            if password != confirm:
+                raise serializers.ValidationError({'confirm_password': 'Passwords do not match.'})
+            if len(password) < 4:
+                raise serializers.ValidationError({'password': 'Password must be at least 4 characters.'})
+        if not data.get('username') and not password:
+            raise serializers.ValidationError('Provide a new username and/or password.')
+        return data

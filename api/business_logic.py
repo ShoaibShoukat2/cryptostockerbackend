@@ -1,12 +1,11 @@
-"""Core business rules: referral tiers, stack profit, locks, daily bonus."""
+"""Core business rules: referral tiers, stack profit, locks, extra bonus."""
 from decimal import Decimal
 
 from django.conf import settings
-from django.db import models
 from django.db.models import Sum
 from django.utils import timezone
 
-from .models import UserProfile, InvestmentLock, DailyReferralTracker, Transaction
+from .models import UserProfile, InvestmentLock, Transaction, SiteConfig, Notification
 
 REFERRAL_TIER_REQUIREMENTS = [
     {
@@ -44,13 +43,26 @@ REFERRAL_TIER_REQUIREMENTS = [
 ]
 
 
+def get_min_deposit_threshold():
+    config = SiteConfig.load()
+    return config.min_deposit or Decimal(str(getattr(settings, 'MIN_DEPOSIT', 100)))
+
+
 def count_direct_members(profile):
-    return UserProfile.objects.filter(referred_by=profile).count()
+    min_dep = get_min_deposit_threshold()
+    return UserProfile.objects.filter(
+        referred_by=profile,
+        total_deposit__gte=min_dep,
+    ).count()
 
 
 def count_indirect_members(profile):
-    direct = UserProfile.objects.filter(referred_by=profile)
-    return UserProfile.objects.filter(referred_by__in=direct).count()
+    min_dep = get_min_deposit_threshold()
+    direct_ids = UserProfile.objects.filter(referred_by=profile).values_list('pk', flat=True)
+    return UserProfile.objects.filter(
+        referred_by_id__in=direct_ids,
+        total_deposit__gte=min_dep,
+    ).count()
 
 
 def get_user_tier(profile):
@@ -104,51 +116,88 @@ def create_investment_lock(user, amount):
     profile.save(update_fields=['locked_investment'])
 
 
-def track_referral_signup(referrer_profile, new_username):
-    """Count daily referrals and award bonus when threshold reached in one day."""
-    today = timezone.now().date()
-    tracker, _ = DailyReferralTracker.objects.get_or_create(
-        user=referrer_profile.user,
-        date=today,
-        defaults={'referral_count': 0, 'bonus_awarded': False},
-    )
-    tracker.referral_count += 1
-    tracker.save(update_fields=['referral_count'])
+def track_referral_deposit(referrer_profile):
+    """Award lifetime extra bonus when enough referrals deposit the minimum amount."""
+    if referrer_profile.extra_bonus_awarded:
+        return Decimal('0')
 
-    threshold = int(getattr(settings, 'DAILY_BONUS_REFERRALS', 3))
-    bonus_amount = Decimal(str(getattr(settings, 'DAILY_BONUS_AMOUNT', 15)))
+    config = SiteConfig.load()
+    threshold = int(config.daily_bonus_referrals or getattr(settings, 'DAILY_BONUS_REFERRALS', 3))
+    bonus_amount = config.daily_bonus_amount or Decimal(str(getattr(settings, 'DAILY_BONUS_AMOUNT', 15)))
+    min_dep = get_min_deposit_threshold()
 
-    if tracker.referral_count >= threshold and not tracker.bonus_awarded:
-        tracker.bonus_awarded = True
-        tracker.save(update_fields=['bonus_awarded'])
+    referrer_profile.extra_bonus_qualified_count += 1
+    update_fields = ['extra_bonus_qualified_count']
+
+    if referrer_profile.extra_bonus_qualified_count >= threshold:
+        referrer_profile.extra_bonus_awarded = True
         referrer_profile.available_balance += bonus_amount
         referrer_profile.total_balance += bonus_amount
         referrer_profile.total_referral_bonus += bonus_amount
-        referrer_profile.save()
+        update_fields.extend([
+            'extra_bonus_awarded', 'available_balance', 'total_balance', 'total_referral_bonus',
+        ])
+        referrer_profile.save(update_fields=update_fields)
         Transaction.objects.create(
             user=referrer_profile.user,
             type='referral',
             amount=bonus_amount,
-            description=f'Daily bonus: {threshold} referrals in one day',
+            description=(
+                f'Extra bonus: {threshold} referrals with ${min_dep:.0f}+ deposit (lifetime)'
+            ),
+        )
+        Notification.objects.create(
+            user=referrer_profile.user,
+            title='Extra Bonus Earned',
+            message=(
+                f'Congratulations! You earned ${bonus_amount:.2f} extra bonus for '
+                f'{threshold} referrals who deposited ${min_dep:.0f} or more.'
+            ),
+            notification_type='bonus',
         )
         return bonus_amount
+
+    referrer_profile.save(update_fields=update_fields)
     return Decimal('0')
 
 
-def get_daily_bonus_status(profile):
-    today = timezone.now().date()
-    tracker = DailyReferralTracker.objects.filter(user=profile.user, date=today).first()
-    threshold = int(getattr(settings, 'DAILY_BONUS_REFERRALS', 3))
-    bonus_amount = float(getattr(settings, 'DAILY_BONUS_AMOUNT', 15))
-    count = tracker.referral_count if tracker else 0
-    awarded = tracker.bonus_awarded if tracker else False
+def process_referral_deposit_qualification(deposit_user_profile):
+    """Mark a referred user as a qualifying team member after they reach min deposit."""
+    if deposit_user_profile.referral_deposit_counted:
+        return Decimal('0')
+
+    min_dep = get_min_deposit_threshold()
+    if deposit_user_profile.total_deposit < min_dep:
+        return Decimal('0')
+
+    deposit_user_profile.referral_deposit_counted = True
+    deposit_user_profile.save(update_fields=['referral_deposit_counted'])
+
+    if deposit_user_profile.referred_by:
+        return track_referral_deposit(deposit_user_profile.referred_by)
+    return Decimal('0')
+
+
+def get_extra_bonus_status(profile):
+    config = SiteConfig.load()
+    threshold = int(config.daily_bonus_referrals or getattr(settings, 'DAILY_BONUS_REFERRALS', 3))
+    bonus_amount = float(config.daily_bonus_amount or getattr(settings, 'DAILY_BONUS_AMOUNT', 15))
+    min_deposit = float(get_min_deposit_threshold())
+    count = profile.extra_bonus_qualified_count
+    awarded = profile.extra_bonus_awarded
     return {
         'referrals_today': count,
+        'qualified_referrals': count,
         'required': threshold,
         'bonus_amount': bonus_amount,
+        'min_deposit_required': min_deposit,
         'awarded_today': awarded,
-        'remaining': max(0, threshold - count),
+        'awarded_lifetime': awarded,
+        'remaining': max(0, threshold - count) if not awarded else 0,
     }
+
+
+get_daily_bonus_status = get_extra_bonus_status
 
 
 def build_tier_levels(profile):
