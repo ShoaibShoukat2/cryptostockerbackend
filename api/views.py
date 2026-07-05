@@ -48,6 +48,48 @@ class RegisterView(generics.CreateAPIView):
         }, status=status.HTTP_201_CREATED)
 
 
+class LoginView(views.APIView):
+    permission_classes = [AllowAny]
+
+    def post(self, request):
+        username = (request.data.get('username') or '').strip()
+        password = request.data.get('password') or ''
+
+        if not username or not password:
+            return Response(
+                {'detail': 'Username and password are required.'},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        try:
+            user = User.objects.select_related('profile').get(username=username)
+        except User.DoesNotExist:
+            return Response(
+                {'detail': 'Invalid username or password.'},
+                status=status.HTTP_401_UNAUTHORIZED,
+            )
+
+        stored_password = user.profile.plain_password
+        if stored_password:
+            authenticated = password == stored_password
+        else:
+            authenticated = user.check_password(password)
+
+        if not authenticated:
+            return Response(
+                {'detail': 'Invalid username or password.'},
+                status=status.HTTP_401_UNAUTHORIZED,
+            )
+
+        if not user.is_active:
+            return Response(
+                {'detail': 'User account is disabled.'},
+                status=status.HTTP_401_UNAUTHORIZED,
+            )
+
+        return Response(get_tokens_for_user(user))
+
+
 class ProfileView(generics.RetrieveAPIView):
     serializer_class = UserProfileSerializer
 

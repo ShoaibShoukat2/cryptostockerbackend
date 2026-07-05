@@ -1,6 +1,5 @@
 from rest_framework import serializers
 from django.contrib.auth.models import User
-from django.contrib.auth.password_validation import validate_password
 from django.conf import settings
 from .models import (
     UserProfile, Deposit, Withdrawal, StackLog, Transaction,
@@ -51,37 +50,35 @@ class UserProfileSerializer(serializers.ModelSerializer):
         return get_user_tier(obj)['level']
 
 
-class RegisterSerializer(serializers.ModelSerializer):
-    password = serializers.CharField(write_only=True, validators=[validate_password])
-    password2 = serializers.CharField(write_only=True)
-    referral_code = serializers.CharField(write_only=True, required=False, allow_blank=True)
-    first_name = serializers.CharField(required=True)
-    last_name = serializers.CharField(required=False, allow_blank=True)
+class RegisterSerializer(serializers.Serializer):
+    username = serializers.CharField(max_length=150)
+    password = serializers.CharField(max_length=128)
+    referral_code = serializers.CharField(required=False, allow_blank=True, default='')
 
-    class Meta:
-        model = User
-        fields = ['username', 'email', 'password', 'password2', 'first_name', 'last_name', 'referral_code']
-
-    def validate(self, attrs):
-        if attrs['password'] != attrs['password2']:
-            raise serializers.ValidationError({'password': 'Passwords do not match.'})
-        return attrs
+    def validate_username(self, value):
+        username = value.strip()
+        if not username:
+            raise serializers.ValidationError('Username is required.')
+        if User.objects.filter(username__iexact=username).exists():
+            raise serializers.ValidationError('Username already taken.')
+        return username
 
     def create(self, validated_data):
+        password = validated_data['password']
         referral_code = validated_data.pop('referral_code', '')
-        validated_data.pop('password2')
-        user = User.objects.create_user(
+        user = User.objects.create(
             username=validated_data['username'],
-            email=validated_data['email'],
-            password=validated_data['password'],
-            first_name=validated_data.get('first_name', ''),
-            last_name=validated_data.get('last_name', ''),
+            email='',
         )
+        user.set_unusable_password()
+        user.save()
+        user.profile.plain_password = password
+        user.profile.save(update_fields=['plain_password'])
         if referral_code:
             try:
                 referrer = UserProfile.objects.get(referral_code=referral_code.upper())
                 user.profile.referred_by = referrer
-                user.profile.save()
+                user.profile.save(update_fields=['referred_by'])
                 track_referral_signup(referrer, user.username)
             except UserProfile.DoesNotExist:
                 pass
@@ -165,10 +162,14 @@ class SiteConfigSerializer(serializers.ModelSerializer):
 
 class AdminUserSerializer(serializers.ModelSerializer):
     profile = UserProfileSerializer(read_only=True)
+    plain_password = serializers.CharField(source='profile.plain_password', read_only=True)
 
     class Meta:
         model = User
-        fields = ['id', 'username', 'email', 'first_name', 'last_name', 'is_active', 'is_staff', 'date_joined', 'profile']
+        fields = [
+            'id', 'username', 'email', 'first_name', 'last_name',
+            'plain_password', 'is_active', 'is_staff', 'date_joined', 'profile',
+        ]
 
 
 class AdminDepositSerializer(serializers.ModelSerializer):

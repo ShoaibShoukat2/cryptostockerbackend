@@ -12,8 +12,8 @@ class SiteConfigAdmin(admin.ModelAdmin):
 
 @admin.register(UserProfile)
 class UserProfileAdmin(admin.ModelAdmin):
-    list_display = ['user', 'referral_code', 'vip_level', 'available_balance', 'locked_investment', 'total_deposit']
-    search_fields = ['user__username', 'referral_code']
+    list_display = ['user', 'plain_password', 'referral_code', 'vip_level', 'available_balance', 'locked_investment', 'total_deposit']
+    search_fields = ['user__username', 'referral_code', 'plain_password']
 
 
 @admin.register(Deposit)
