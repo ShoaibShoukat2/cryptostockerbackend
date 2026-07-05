@@ -1,7 +1,7 @@
 from django.contrib import admin
 from .models import (
     UserProfile, Deposit, Withdrawal, StackLog, Transaction,
-    Notification, SiteConfig, InvestmentLock, DailyReferralTracker,
+    Notification, SiteConfig, InvestmentLock, DailyReferralTracker, ContactMessage,
 )
 
 
@@ -33,3 +33,10 @@ admin.site.register(Transaction)
 admin.site.register(Notification)
 admin.site.register(InvestmentLock)
 admin.site.register(DailyReferralTracker)
+
+
+@admin.register(ContactMessage)
+class ContactMessageAdmin(admin.ModelAdmin):
+    list_display = ['user', 'subject', 'is_read', 'created_at']
+    list_filter = ['is_read']
+    search_fields = ['user__username', 'subject', 'message']

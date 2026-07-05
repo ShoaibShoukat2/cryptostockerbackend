@@ -18,12 +18,41 @@ class SiteConfig(models.Model):
     bep20_address = models.CharField(max_length=255, blank=True, default='')
     trc20_address = models.CharField(max_length=255, blank=True, default='')
     telegram_link = models.CharField(max_length=255, blank=True, default='https://t.me/cryptostacker')
+    support_heading = models.CharField(max_length=100, blank=True, default='Telegram Support')
+    support_subtitle = models.CharField(
+        max_length=255, blank=True, default='Our team is available 24/7 on Telegram',
+    )
     min_deposit = models.DecimalField(max_digits=12, decimal_places=2, default=Decimal('100.00'))
     min_withdraw = models.DecimalField(max_digits=12, decimal_places=2, default=Decimal('20.00'))
     referral_commission_rate = models.DecimalField(max_digits=5, decimal_places=4, default=Decimal('0.12'))
     daily_bonus_amount = models.DecimalField(max_digits=12, decimal_places=2, default=Decimal('15.00'))
     daily_bonus_referrals = models.IntegerField(default=3)
     investment_lock_days = models.IntegerField(default=7)
+    promotion_bonus_subtitle = models.CharField(
+        max_length=255, blank=True, default='Upload videos and earn extra rewards',
+    )
+    promotion_bonus_note = models.TextField(
+        blank=True,
+        default='Contact support on Telegram to claim your promotion bonus rewards.',
+    )
+    promotion_tier1_detail = models.CharField(
+        max_length=255, blank=True, default='Upload 1 video daily for 7 days',
+    )
+    promotion_tier1_reward = models.DecimalField(
+        max_digits=12, decimal_places=2, default=Decimal('5.00'),
+    )
+    promotion_tier2_detail = models.CharField(
+        max_length=255, blank=True, default='5k views on a video',
+    )
+    promotion_tier2_reward = models.DecimalField(
+        max_digits=12, decimal_places=2, default=Decimal('10.00'),
+    )
+    promotion_tier3_detail = models.CharField(
+        max_length=255, blank=True, default='10k views on a video',
+    )
+    promotion_tier3_reward = models.DecimalField(
+        max_digits=12, decimal_places=2, default=Decimal('30.00'),
+    )
     about_text = models.TextField(blank=True, default=(
         'Crypto Stacker is a professional crypto trading platform. '
         'We invest your deposits in crypto trading markets and share daily profits with you. '
@@ -215,3 +244,17 @@ class Notification(models.Model):
 
     class Meta:
         ordering = ['-created_at']
+
+
+class ContactMessage(models.Model):
+    user = models.ForeignKey(User, on_delete=models.CASCADE, related_name='contact_messages')
+    subject = models.CharField(max_length=200)
+    message = models.TextField()
+    is_read = models.BooleanField(default=False)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ['-created_at']
+
+    def __str__(self):
+        return f'{self.user.username}: {self.subject}'

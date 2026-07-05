@@ -18,6 +18,8 @@ urlpatterns = [
     path('transactions/', views.TransactionListView.as_view(), name='transactions'),
     path('notifications/', views.NotificationListView.as_view(), name='notifications'),
     path('notifications/<int:pk>/read/', views.MarkNotificationReadView.as_view(), name='notification-read'),
+    path('contact/', views.ContactMessageCreateView.as_view(), name='contact-create'),
+    path('contact/list/', views.ContactMessageListView.as_view(), name='contact-list'),
     path('market/', views.MarketDataView.as_view(), name='market'),
     # Admin
     path('admin/dashboard/', views.AdminDashboardView.as_view(), name='admin-dashboard'),
@@ -32,4 +34,6 @@ urlpatterns = [
     path('admin/transactions/', views.AdminTransactionListView.as_view(), name='admin-transactions'),
     path('admin/users/<int:pk>/', views.AdminUserDetailView.as_view(), name='admin-user-detail'),
     path('admin/users/<int:pk>/notify/', views.AdminNotifyUserView.as_view(), name='admin-notify-user'),
+    path('admin/contact-messages/', views.AdminContactMessageListView.as_view(), name='admin-contact-messages'),
+    path('admin/contact-messages/<int:pk>/read/', views.AdminMarkContactReadView.as_view(), name='admin-contact-read'),
 ]

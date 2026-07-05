@@ -3,7 +3,7 @@ from django.contrib.auth.models import User
 from django.conf import settings
 from .models import (
     UserProfile, Deposit, Withdrawal, StackLog, Transaction,
-    Notification, SiteConfig,
+    Notification, SiteConfig, ContactMessage,
 )
 from .business_logic import get_withdrawable_balance, get_user_tier, track_referral_signup
 
@@ -149,13 +149,34 @@ class NotificationSerializer(serializers.ModelSerializer):
         fields = ['id', 'title', 'message', 'notification_type', 'extra_data', 'is_read', 'created_at']
 
 
+class ContactMessageSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = ContactMessage
+        fields = ['id', 'subject', 'message', 'is_read', 'created_at']
+        read_only_fields = ['id', 'is_read', 'created_at']
+
+
+class AdminContactMessageSerializer(serializers.ModelSerializer):
+    username = serializers.CharField(source='user.username', read_only=True)
+    email = serializers.EmailField(source='user.email', read_only=True)
+
+    class Meta:
+        model = ContactMessage
+        fields = ['id', 'username', 'email', 'subject', 'message', 'is_read', 'created_at']
+
+
 class SiteConfigSerializer(serializers.ModelSerializer):
     class Meta:
         model = SiteConfig
         fields = [
             'bep20_address', 'trc20_address', 'telegram_link',
+            'support_heading', 'support_subtitle',
             'min_deposit', 'min_withdraw', 'referral_commission_rate',
             'daily_bonus_amount', 'daily_bonus_referrals', 'investment_lock_days',
+            'promotion_bonus_subtitle', 'promotion_bonus_note',
+            'promotion_tier1_detail', 'promotion_tier1_reward',
+            'promotion_tier2_detail', 'promotion_tier2_reward',
+            'promotion_tier3_detail', 'promotion_tier3_reward',
             'about_text',
         ]
 

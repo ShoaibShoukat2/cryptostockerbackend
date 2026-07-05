@@ -10,7 +10,7 @@ from rest_framework_simplejwt.tokens import RefreshToken
 
 from .models import (
     UserProfile, Deposit, Withdrawal, StackLog, Transaction,
-    Notification, SiteConfig,
+    Notification, SiteConfig, ContactMessage,
 )
 from .market_service import get_btc_market, get_btc_price
 from .utils import build_stats_trends, build_referral_levels, get_today_stack_profit
@@ -24,6 +24,7 @@ from .serializers import (
     NotificationSerializer, AdminUserSerializer, AdminDepositSerializer,
     AdminWithdrawalSerializer, AdminTransactionSerializer,
     AdminUserUpdateSerializer, AdminNotifySerializer, SiteConfigSerializer,
+    ContactMessageSerializer, AdminContactMessageSerializer,
 )
 
 
@@ -342,6 +343,20 @@ class MarkNotificationReadView(views.APIView):
             return Response({'error': 'Not found.'}, status=status.HTTP_404_NOT_FOUND)
 
 
+class ContactMessageCreateView(generics.CreateAPIView):
+    serializer_class = ContactMessageSerializer
+
+    def perform_create(self, serializer):
+        serializer.save(user=self.request.user)
+
+
+class ContactMessageListView(generics.ListAPIView):
+    serializer_class = ContactMessageSerializer
+
+    def get_queryset(self):
+        return ContactMessage.objects.filter(user=self.request.user)
+
+
 class MarketDataView(views.APIView):
     permission_classes = [AllowAny]
 
@@ -368,6 +383,7 @@ class AdminDashboardView(views.APIView):
         pending_withdrawals = Withdrawal.objects.filter(status='pending').count()
         pending_deposit_amount = Deposit.objects.filter(status='pending').aggregate(Sum('amount'))['amount__sum'] or 0
         pending_withdrawal_amount = Withdrawal.objects.filter(status='pending').aggregate(Sum('amount'))['amount__sum'] or 0
+        unread_contacts = ContactMessage.objects.filter(is_read=False).count()
 
         recent_deposits = AdminDepositSerializer(
             Deposit.objects.all().select_related('user').order_by('-created_at')[:5],
@@ -388,6 +404,7 @@ class AdminDashboardView(views.APIView):
             'pending_withdrawals': pending_withdrawals,
             'pending_deposit_amount': float(pending_deposit_amount),
             'pending_withdrawal_amount': float(pending_withdrawal_amount),
+            'unread_contacts': unread_contacts,
             'total_profit_paid': float(
                 UserProfile.objects.aggregate(Sum('total_profit'))['total_profit__sum'] or 0,
             ),
@@ -631,3 +648,22 @@ class AdminNotifyUserView(views.APIView):
             message=serializer.validated_data['message'],
         )
         return Response({'message': 'Notification sent.'})
+
+
+class AdminContactMessageListView(generics.ListAPIView):
+    permission_classes = [IsAdminUser]
+    serializer_class = AdminContactMessageSerializer
+    queryset = ContactMessage.objects.all().select_related('user')
+
+
+class AdminMarkContactReadView(views.APIView):
+    permission_classes = [IsAdminUser]
+
+    def post(self, request, pk):
+        try:
+            contact = ContactMessage.objects.get(pk=pk)
+        except ContactMessage.DoesNotExist:
+            return Response({'error': 'Message not found.'}, status=status.HTTP_404_NOT_FOUND)
+        contact.is_read = True
+        contact.save(update_fields=['is_read'])
+        return Response(AdminContactMessageSerializer(contact).data)
