@@ -13,7 +13,7 @@ from .models import (
     Notification, SiteConfig,
 )
 from .market_service import get_btc_market, get_btc_price
-from .utils import build_stats_trends, build_referral_levels
+from .utils import build_stats_trends, build_referral_levels, get_today_stack_profit
 from .business_logic import (
     get_profit_rate, get_user_tier, get_withdrawable_balance,
     create_investment_lock, get_daily_bonus_status, release_expired_locks,
@@ -85,12 +85,7 @@ class DashboardView(views.APIView):
 
         btc_equivalent = float(profile.available_balance / btc_price) if btc_price else 0
 
-        today_start = timezone.now().replace(hour=0, minute=0, second=0, microsecond=0)
-        today_profit = (
-            StackLog.objects.filter(user=request.user, created_at__gte=today_start)
-            .aggregate(total=Sum('profit_earned'))['total']
-            or Decimal('0')
-        )
+        today_profit = get_today_stack_profit(request.user)
 
         return Response({
             'profile': UserProfileSerializer(profile).data,

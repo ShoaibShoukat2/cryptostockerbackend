@@ -1,6 +1,9 @@
 from decimal import Decimal
+
 from django.db.models import Sum
-from .models import Transaction
+from django.utils import timezone
+
+from .models import StackLog, Transaction
 
 
 POINTS = 12
@@ -12,6 +15,18 @@ def _pad_series(values, points=POINTS):
         step = len(values) / points
         return [values[int(i * step)] for i in range(points)]
     return [0.0] * (points - len(values)) + values
+
+
+def get_today_stack_profit(user):
+    """Sum stack profits earned since local midnight (respects TIME_ZONE)."""
+    today_start = timezone.localtime().replace(
+        hour=0, minute=0, second=0, microsecond=0,
+    )
+    return (
+        StackLog.objects.filter(user=user, created_at__gte=today_start)
+        .aggregate(total=Sum('profit_earned'))['total']
+        or Decimal('0')
+    )
 
 
 def build_stats_trends(user):
