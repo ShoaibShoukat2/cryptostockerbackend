@@ -43,6 +43,33 @@ REFERRAL_TIER_REQUIREMENTS = [
 ]
 
 
+def _format_profit_percent(rate):
+    pct = float(rate) * 100
+    if pct == int(pct):
+        return f'{int(pct)}%'
+    return f'{pct:g}%'
+
+
+def get_referral_tier_requirements():
+    config = SiteConfig.load()
+    configured_rates = [
+        config.tier1_profit_rate,
+        config.tier2_profit_rate,
+        config.tier3_profit_rate,
+        config.tier4_profit_rate,
+    ]
+    tiers = []
+    for index, base in enumerate(REFERRAL_TIER_REQUIREMENTS):
+        configured = configured_rates[index] if index < len(configured_rates) else None
+        profit_rate = Decimal(str(configured or base['profit_rate']))
+        tiers.append({
+            **base,
+            'profit_rate': profit_rate,
+            'profit_percent': _format_profit_percent(profit_rate),
+        })
+    return tiers
+
+
 def get_min_deposit_threshold():
     config = SiteConfig.load()
     return config.min_deposit or Decimal(str(getattr(settings, 'MIN_DEPOSIT', 100)))
@@ -74,8 +101,9 @@ def get_user_tier(profile):
     direct = count_direct_members(profile)
     indirect = count_indirect_members(profile)
     deposit = profile.total_deposit
-    matched = REFERRAL_TIER_REQUIREMENTS[0]
-    for tier in REFERRAL_TIER_REQUIREMENTS:
+    tiers = get_referral_tier_requirements()
+    matched = tiers[0]
+    for tier in tiers:
         if (
             direct >= tier['direct']
             and indirect >= tier['indirect']
@@ -216,7 +244,7 @@ def build_tier_levels(profile):
         )['total'] or 0,
     )
     levels = []
-    for tier in REFERRAL_TIER_REQUIREMENTS:
+    for tier in get_referral_tier_requirements():
         levels.append({
             'level': tier['level'],
             'direct_required': tier['direct'],

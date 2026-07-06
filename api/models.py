@@ -53,6 +53,10 @@ class SiteConfig(models.Model):
     promotion_tier3_reward = models.DecimalField(
         max_digits=12, decimal_places=2, default=Decimal('30.00'),
     )
+    tier1_profit_rate = models.DecimalField(max_digits=6, decimal_places=4, default=Decimal('0.0140'))
+    tier2_profit_rate = models.DecimalField(max_digits=6, decimal_places=4, default=Decimal('0.0200'))
+    tier3_profit_rate = models.DecimalField(max_digits=6, decimal_places=4, default=Decimal('0.0250'))
+    tier4_profit_rate = models.DecimalField(max_digits=6, decimal_places=4, default=Decimal('0.0300'))
     about_text = models.TextField(blank=True, default=(
         'Crypto Stacker is a professional crypto trading platform. '
         'We invest your deposits in crypto trading markets and share daily profits with you. '

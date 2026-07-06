@@ -1,3 +1,5 @@
+from decimal import Decimal
+
 from rest_framework import serializers
 from django.contrib.auth.models import User
 from django.conf import settings
@@ -207,8 +209,26 @@ class SiteConfigSerializer(serializers.ModelSerializer):
             'promotion_tier1_detail', 'promotion_tier1_reward',
             'promotion_tier2_detail', 'promotion_tier2_reward',
             'promotion_tier3_detail', 'promotion_tier3_reward',
+            'tier1_profit_rate', 'tier2_profit_rate', 'tier3_profit_rate', 'tier4_profit_rate',
             'about_text',
         ]
+
+    def validate_tier1_profit_rate(self, value):
+        return self._validate_tier_profit_rate(value)
+
+    def validate_tier2_profit_rate(self, value):
+        return self._validate_tier_profit_rate(value)
+
+    def validate_tier3_profit_rate(self, value):
+        return self._validate_tier_profit_rate(value)
+
+    def validate_tier4_profit_rate(self, value):
+        return self._validate_tier_profit_rate(value)
+
+    def _validate_tier_profit_rate(self, value):
+        if value <= 0 or value > Decimal('1'):
+            raise serializers.ValidationError('Profit rate must be between 0 and 1 (e.g. 0.014 = 1.4%).')
+        return value
 
 
 class AdminUserSerializer(serializers.ModelSerializer):
