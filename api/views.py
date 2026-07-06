@@ -346,13 +346,16 @@ class WithdrawalCreateView(generics.CreateAPIView):
             user=self.request.user,
             type='withdraw',
             amount=withdrawal.amount,
-            description=f'Withdrawal request - {withdrawal.transaction_id}',
+            description=(
+                f'Withdrawal request ({withdrawal.network}) - {withdrawal.transaction_id}'
+            ),
         )
         Notification.objects.create(
             user=self.request.user,
             title='Withdrawal Submitted',
             message=(
-                f'Your withdrawal of ${withdrawal.amount} has been submitted. '
+                f'Your withdrawal of ${withdrawal.amount} via {withdrawal.network} '
+                f'to {withdrawal.wallet_address} has been submitted. '
                 f'Processing time: 24–72 hours.'
             ),
             notification_type='withdraw',
@@ -639,7 +642,10 @@ class AdminApproveWithdrawalView(views.APIView):
             Notification.objects.create(
                 user=withdrawal.user,
                 title='Withdrawal Approved',
-                message=f'Your withdrawal of ${withdrawal.amount} has been approved and sent.',
+                message=(
+                    f'Your withdrawal of ${withdrawal.amount} via {withdrawal.network} '
+                    f'has been approved and sent to {withdrawal.wallet_address}.'
+                ),
                 notification_type='withdraw',
             )
             return Response({'message': 'Withdrawal approved.'})
@@ -658,7 +664,10 @@ class AdminRejectWithdrawalView(views.APIView):
             Notification.objects.create(
                 user=withdrawal.user,
                 title='Withdrawal Rejected',
-                message=f'Your withdrawal of ${withdrawal.amount} has been rejected.',
+                message=(
+                    f'Your withdrawal of ${withdrawal.amount} via {withdrawal.network} '
+                    f'has been rejected.'
+                ),
                 notification_type='withdraw',
             )
             return Response({'message': 'Withdrawal rejected.'})

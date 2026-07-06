@@ -24,8 +24,8 @@ class DepositAdmin(admin.ModelAdmin):
 
 @admin.register(Withdrawal)
 class WithdrawalAdmin(admin.ModelAdmin):
-    list_display = ['user', 'amount', 'status', 'created_at']
-    list_filter = ['status']
+    list_display = ['user', 'amount', 'network', 'wallet_address', 'status', 'created_at']
+    list_filter = ['status', 'network']
 
 
 admin.site.register(StackLog)

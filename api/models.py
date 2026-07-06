@@ -189,9 +189,14 @@ class Withdrawal(models.Model):
         ('approved', 'Approved'),
         ('rejected', 'Rejected'),
     ]
+    NETWORK_CHOICES = [
+        ('BEP20', 'BEP20'),
+        ('TRC20', 'TRC20'),
+    ]
 
     user = models.ForeignKey(User, on_delete=models.CASCADE, related_name='withdrawals')
     amount = models.DecimalField(max_digits=12, decimal_places=2)
+    network = models.CharField(max_length=10, choices=NETWORK_CHOICES, default='BEP20')
     status = models.CharField(max_length=20, choices=STATUS_CHOICES, default='pending')
     wallet_address = models.CharField(max_length=255, blank=True)
     transaction_id = models.CharField(max_length=50, unique=True, default=uuid.uuid4)

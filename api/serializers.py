@@ -139,7 +139,7 @@ class DepositSerializer(serializers.ModelSerializer):
 class WithdrawalSerializer(serializers.ModelSerializer):
     class Meta:
         model = Withdrawal
-        fields = ['id', 'amount', 'status', 'wallet_address', 'transaction_id', 'note', 'created_at']
+        fields = ['id', 'amount', 'network', 'status', 'wallet_address', 'transaction_id', 'note', 'created_at']
         read_only_fields = ['status', 'transaction_id', 'created_at']
 
     def validate_amount(self, value):
@@ -148,6 +148,17 @@ class WithdrawalSerializer(serializers.ModelSerializer):
         if value < min_wd:
             raise serializers.ValidationError(f'Minimum withdrawal is ${min_wd}.')
         return value
+
+    def validate_network(self, value):
+        if value not in ('BEP20', 'TRC20'):
+            raise serializers.ValidationError('Network must be BEP20 or TRC20.')
+        return value
+
+    def validate_wallet_address(self, value):
+        address = (value or '').strip()
+        if not address:
+            raise serializers.ValidationError('Wallet address is required.')
+        return address
 
 
 class StackLogSerializer(serializers.ModelSerializer):
@@ -242,7 +253,10 @@ class AdminWithdrawalSerializer(serializers.ModelSerializer):
 
     class Meta:
         model = Withdrawal
-        fields = ['id', 'username', 'amount', 'status', 'wallet_address', 'transaction_id', 'note', 'created_at', 'updated_at']
+        fields = [
+            'id', 'username', 'amount', 'network', 'status', 'wallet_address',
+            'transaction_id', 'note', 'created_at', 'updated_at',
+        ]
 
 
 class AdminTransactionSerializer(serializers.ModelSerializer):
