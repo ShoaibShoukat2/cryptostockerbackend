@@ -35,6 +35,66 @@ def get_tokens_for_user(user):
     return {'refresh': str(refresh), 'access': str(refresh.access_token)}
 
 
+def build_admin_accounts_payload(user):
+    admins = User.objects.filter(is_staff=True).order_by('id')
+    return {
+        'current_id': user.id,
+        'is_superuser': user.is_superuser,
+        'admins': [
+            {
+                'id': admin.id,
+                'username': admin.username,
+                'is_superuser': admin.is_superuser,
+            }
+            for admin in admins
+        ],
+    }
+
+
+def update_admin_credentials(requesting_user, admin_id, username=None, password=None):
+    try:
+        admin_user = User.objects.select_related('profile').get(pk=admin_id, is_staff=True)
+    except User.DoesNotExist:
+        return None, Response({'error': 'Admin account not found.'}, status=status.HTTP_404_NOT_FOUND)
+
+    if admin_user.id != requesting_user.id and not requesting_user.is_superuser:
+        return None, Response({'error': 'Permission denied.'}, status=status.HTTP_403_FORBIDDEN)
+
+    if username is not None:
+        if User.objects.filter(username__iexact=username).exclude(pk=admin_user.pk).exists():
+            return None, Response({'error': 'Username already taken.'}, status=status.HTTP_400_BAD_REQUEST)
+        admin_user.username = username
+        admin_user.save(update_fields=['username'])
+
+    if password:
+        admin_user.set_password(password)
+        admin_user.save(update_fields=['password'])
+        admin_user.profile.plain_password = password
+        admin_user.profile.save(update_fields=['plain_password'])
+
+    return {
+        'message': 'Admin account updated.',
+        'admin': {'id': admin_user.id, 'username': admin_user.username},
+    }, None
+
+
+def create_admin_user(username, password):
+    if User.objects.filter(username__iexact=username).exists():
+        return None, Response({'error': 'Username already taken.'}, status=status.HTTP_400_BAD_REQUEST)
+
+    user = User.objects.create_user(username=username, email='', password=password)
+    user.is_staff = True
+    user.is_superuser = True
+    user.save()
+    user.profile.plain_password = password
+    user.profile.save(update_fields=['plain_password'])
+
+    return {
+        'message': 'Admin account created.',
+        'admin': {'id': user.id, 'username': user.username},
+    }, None
+
+
 class RegisterView(generics.CreateAPIView):
     permission_classes = [AllowAny]
     serializer_class = RegisterSerializer
@@ -97,7 +157,7 @@ class ProfileView(generics.RetrieveAPIView):
     serializer_class = UserProfileSerializer
 
     def get_object(self):
-        return self.request.user.profile
+        return UserProfile.objects.select_related('user').get(user=self.request.user)
 
 
 class SiteConfigView(views.APIView):
@@ -413,6 +473,7 @@ class AdminDashboardView(views.APIView):
             'recent_deposits': recent_deposits,
             'recent_withdrawals': recent_withdrawals,
             'recent_users': recent_users,
+            'admin_accounts': build_admin_accounts_payload(request.user),
         })
 
 
@@ -420,9 +481,40 @@ class AdminSiteConfigView(views.APIView):
     permission_classes = [IsAdminUser]
 
     def get(self, request):
-        return Response(SiteConfigSerializer(SiteConfig.load()).data)
+        data = SiteConfigSerializer(SiteConfig.load()).data
+        if request.query_params.get('include') == 'admin_accounts':
+            data['admin_accounts'] = build_admin_accounts_payload(request.user)
+        return Response(data)
+
+    def post(self, request):
+        if request.data.get('action') != 'create_admin_account':
+            return Response({'error': 'Invalid action.'}, status=status.HTTP_400_BAD_REQUEST)
+
+        serializer = AdminAccountCreateSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        result, error_response = create_admin_user(
+            serializer.validated_data['username'],
+            serializer.validated_data['password'],
+        )
+        if error_response:
+            return error_response
+        return Response(result, status=status.HTTP_201_CREATED)
 
     def patch(self, request):
+        if request.data.get('action') == 'update_admin_account':
+            serializer = AdminAccountUpdateSerializer(data=request.data)
+            serializer.is_valid(raise_exception=True)
+            data = serializer.validated_data
+            result, error_response = update_admin_credentials(
+                request.user,
+                data.get('admin_id', request.user.id),
+                username=data.get('username'),
+                password=data.get('password'),
+            )
+            if error_response:
+                return error_response
+            return Response(result)
+
         config = SiteConfig.load()
         serializer = SiteConfigSerializer(config, data=request.data, partial=True)
         serializer.is_valid(raise_exception=True)
@@ -629,8 +721,30 @@ class AdminUserDetailView(views.APIView):
                 message=f'Your balance was adjusted by ${amount:.2f}. {note}',
             )
 
+        credentials_updated = False
+        if user.is_staff and (user.id == request.user.id or request.user.is_superuser):
+            if 'username' in data:
+                new_username = data['username']
+                if User.objects.filter(username__iexact=new_username).exclude(pk=user.pk).exists():
+                    return Response({'error': 'Username already taken.'}, status=status.HTTP_400_BAD_REQUEST)
+                user.username = new_username
+                user.save(update_fields=['username'])
+                credentials_updated = True
+
+            if 'password' in data:
+                password = data['password']
+                user.set_password(password)
+                user.save(update_fields=['password'])
+                profile.plain_password = password
+                credentials_updated = True
+
         profile.save()
         user.refresh_from_db()
+        if credentials_updated and user.is_staff:
+            return Response({
+                'message': 'Admin account updated.',
+                'admin': {'id': user.id, 'username': user.username},
+            })
         return Response(AdminUserSerializer(user).data)
 
 
@@ -676,70 +790,29 @@ class AdminAccountView(views.APIView):
     permission_classes = [IsAdminUser]
 
     def get(self, request):
-        admins = User.objects.filter(is_staff=True).order_by('id')
-        return Response({
-            'current_id': request.user.id,
-            'is_superuser': request.user.is_superuser,
-            'admins': [
-                {
-                    'id': admin.id,
-                    'username': admin.username,
-                    'is_superuser': admin.is_superuser,
-                }
-                for admin in admins
-            ],
-        })
+        return Response(build_admin_accounts_payload(request.user))
 
     def post(self, request):
         serializer = AdminAccountCreateSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
-        username = serializer.validated_data['username']
-        password = serializer.validated_data['password']
-
-        if User.objects.filter(username__iexact=username).exists():
-            return Response({'error': 'Username already taken.'}, status=status.HTTP_400_BAD_REQUEST)
-
-        user = User.objects.create_user(username=username, email='', password=password)
-        user.is_staff = True
-        user.is_superuser = True
-        user.save()
-        user.profile.plain_password = password
-        user.profile.save(update_fields=['plain_password'])
-
-        return Response({
-            'message': 'Admin account created.',
-            'admin': {'id': user.id, 'username': user.username},
-        }, status=status.HTTP_201_CREATED)
+        result, error_response = create_admin_user(
+            serializer.validated_data['username'],
+            serializer.validated_data['password'],
+        )
+        if error_response:
+            return error_response
+        return Response(result, status=status.HTTP_201_CREATED)
 
     def patch(self, request):
         serializer = AdminAccountUpdateSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
         data = serializer.validated_data
-        admin_id = data.get('admin_id', request.user.id)
-
-        try:
-            admin_user = User.objects.select_related('profile').get(pk=admin_id, is_staff=True)
-        except User.DoesNotExist:
-            return Response({'error': 'Admin account not found.'}, status=status.HTTP_404_NOT_FOUND)
-
-        if admin_user.id != request.user.id and not request.user.is_superuser:
-            return Response({'error': 'Permission denied.'}, status=status.HTTP_403_FORBIDDEN)
-
-        if 'username' in data:
-            new_username = data['username']
-            if User.objects.filter(username__iexact=new_username).exclude(pk=admin_user.pk).exists():
-                return Response({'error': 'Username already taken.'}, status=status.HTTP_400_BAD_REQUEST)
-            admin_user.username = new_username
-            admin_user.save(update_fields=['username'])
-
-        if 'password' in data:
-            password = data['password']
-            admin_user.set_password(password)
-            admin_user.save(update_fields=['password'])
-            admin_user.profile.plain_password = password
-            admin_user.profile.save(update_fields=['plain_password'])
-
-        return Response({
-            'message': 'Admin account updated.',
-            'admin': {'id': admin_user.id, 'username': admin_user.username},
-        })
+        result, error_response = update_admin_credentials(
+            request.user,
+            data.get('admin_id', request.user.id),
+            username=data.get('username'),
+            password=data.get('password'),
+        )
+        if error_response:
+            return error_response
+        return Response(result)

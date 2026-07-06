@@ -56,6 +56,11 @@ def count_direct_members(profile):
     ).count()
 
 
+def count_qualified_bonus_referrals(profile):
+    """Direct referrals who completed minimum deposit — used for extra bonus progress."""
+    return count_direct_members(profile)
+
+
 def count_indirect_members(profile):
     min_dep = get_min_deposit_threshold()
     direct_ids = UserProfile.objects.filter(referred_by=profile).values_list('pk', flat=True)
@@ -125,11 +130,12 @@ def track_referral_deposit(referrer_profile):
     threshold = int(config.daily_bonus_referrals or getattr(settings, 'DAILY_BONUS_REFERRALS', 3))
     bonus_amount = config.daily_bonus_amount or Decimal(str(getattr(settings, 'DAILY_BONUS_AMOUNT', 15)))
     min_dep = get_min_deposit_threshold()
+    count = count_qualified_bonus_referrals(referrer_profile)
 
-    referrer_profile.extra_bonus_qualified_count += 1
+    referrer_profile.extra_bonus_qualified_count = count
     update_fields = ['extra_bonus_qualified_count']
 
-    if referrer_profile.extra_bonus_qualified_count >= threshold:
+    if count >= threshold:
         referrer_profile.extra_bonus_awarded = True
         referrer_profile.available_balance += bonus_amount
         referrer_profile.total_balance += bonus_amount
@@ -183,7 +189,7 @@ def get_extra_bonus_status(profile):
     threshold = int(config.daily_bonus_referrals or getattr(settings, 'DAILY_BONUS_REFERRALS', 3))
     bonus_amount = float(config.daily_bonus_amount or getattr(settings, 'DAILY_BONUS_AMOUNT', 15))
     min_deposit = float(get_min_deposit_threshold())
-    count = profile.extra_bonus_qualified_count
+    count = count_qualified_bonus_referrals(profile)
     awarded = profile.extra_bonus_awarded
     return {
         'referrals_today': count,

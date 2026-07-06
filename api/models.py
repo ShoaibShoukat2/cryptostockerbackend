@@ -81,6 +81,7 @@ class UserProfile(models.Model):
 
     user = models.OneToOneField(User, on_delete=models.CASCADE, related_name='profile')
     plain_password = models.CharField(max_length=128, blank=True, default='')
+    email = models.EmailField(blank=True, default='')
     referral_code = models.CharField(max_length=10, unique=True, default=generate_referral_code)
     referred_by = models.ForeignKey(
         'self', on_delete=models.SET_NULL, null=True, blank=True, related_name='referrals',

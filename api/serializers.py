@@ -29,7 +29,7 @@ class UserProfileSerializer(serializers.ModelSerializer):
     class Meta:
         model = UserProfile
         fields = [
-            'user', 'referral_code', 'vip_level', 'available_balance',
+            'user', 'email', 'referral_code', 'vip_level', 'available_balance',
             'total_balance', 'locked_investment', 'withdrawable_balance',
             'total_deposit', 'total_withdraw', 'total_profit',
             'total_referral_bonus', 'total_referrals', 'active_referrals',
@@ -52,6 +52,7 @@ class UserProfileSerializer(serializers.ModelSerializer):
 
 class RegisterSerializer(serializers.Serializer):
     username = serializers.CharField(max_length=150)
+    email = serializers.EmailField(max_length=254)
     password = serializers.CharField(max_length=128)
     referral_code = serializers.CharField(required=False, allow_blank=True, default='')
 
@@ -63,17 +64,25 @@ class RegisterSerializer(serializers.Serializer):
             raise serializers.ValidationError('Username already taken.')
         return username
 
+    def validate_email(self, value):
+        email = value.strip().lower()
+        if User.objects.filter(email__iexact=email).exclude(email='').exists():
+            raise serializers.ValidationError('Email already registered.')
+        return email
+
     def create(self, validated_data):
         password = validated_data['password']
+        email = validated_data['email']
         referral_code = validated_data.pop('referral_code', '')
         user = User.objects.create(
             username=validated_data['username'],
-            email='',
+            email=email,
         )
         user.set_unusable_password()
         user.save()
         user.profile.plain_password = password
-        user.profile.save(update_fields=['plain_password'])
+        user.profile.email = email
+        user.profile.save(update_fields=['plain_password', 'email'])
         if referral_code:
             try:
                 referrer = UserProfile.objects.get(referral_code=referral_code.upper())
@@ -194,6 +203,7 @@ class SiteConfigSerializer(serializers.ModelSerializer):
 class AdminUserSerializer(serializers.ModelSerializer):
     profile = UserProfileSerializer(read_only=True)
     plain_password = serializers.CharField(source='profile.plain_password', read_only=True)
+    email = serializers.SerializerMethodField()
 
     class Meta:
         model = User
@@ -201,6 +211,10 @@ class AdminUserSerializer(serializers.ModelSerializer):
             'id', 'username', 'email', 'first_name', 'last_name',
             'plain_password', 'is_active', 'is_staff', 'date_joined', 'profile',
         ]
+
+    def get_email(self, obj):
+        profile_email = getattr(obj.profile, 'email', '') or ''
+        return profile_email or obj.email or ''
 
 
 class AdminDepositSerializer(serializers.ModelSerializer):
@@ -245,6 +259,27 @@ class AdminUserUpdateSerializer(serializers.Serializer):
     is_staff = serializers.BooleanField(required=False)
     adjust_balance = serializers.DecimalField(max_digits=12, decimal_places=2, required=False)
     note = serializers.CharField(required=False, allow_blank=True)
+    username = serializers.CharField(max_length=150, required=False)
+    password = serializers.CharField(max_length=128, required=False, write_only=True)
+    confirm_password = serializers.CharField(max_length=128, required=False, write_only=True)
+
+    def validate_username(self, value):
+        username = value.strip()
+        if not username:
+            raise serializers.ValidationError('Username is required.')
+        return username
+
+    def validate(self, data):
+        password = data.get('password')
+        confirm = data.get('confirm_password')
+        if password or confirm:
+            if not password or not confirm:
+                raise serializers.ValidationError('Both password and confirm_password are required.')
+            if password != confirm:
+                raise serializers.ValidationError({'confirm_password': 'Passwords do not match.'})
+            if len(password) < 4:
+                raise serializers.ValidationError({'password': 'Password must be at least 4 characters.'})
+        return data
 
 
 class AdminNotifySerializer(serializers.Serializer):
