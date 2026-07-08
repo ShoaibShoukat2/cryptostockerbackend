@@ -122,7 +122,7 @@ SIMPLE_JWT = {
 
 STACK_DAILY_PROFIT_RATE = float(os.getenv('STACK_DAILY_PROFIT_RATE', '0.014'))
 REFERRAL_BONUS_RATE = float(os.getenv('REFERRAL_BONUS_RATE', '0.12'))
-MIN_DEPOSIT = float(os.getenv('MIN_DEPOSIT', '100'))
+MIN_DEPOSIT = float(os.getenv('MIN_DEPOSIT', '50'))
 MIN_WITHDRAW = float(os.getenv('MIN_WITHDRAW', '20'))
 INVESTMENT_LOCK_DAYS = int(os.getenv('INVESTMENT_LOCK_DAYS', '7'))
 DAILY_BONUS_AMOUNT = float(os.getenv('DAILY_BONUS_AMOUNT', '15'))

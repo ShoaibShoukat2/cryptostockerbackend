@@ -22,7 +22,7 @@ class SiteConfig(models.Model):
     support_subtitle = models.CharField(
         max_length=255, blank=True, default='Our team is available 24/7 on Telegram',
     )
-    min_deposit = models.DecimalField(max_digits=12, decimal_places=2, default=Decimal('100.00'))
+    min_deposit = models.DecimalField(max_digits=12, decimal_places=2, default=Decimal('50.00'))
     min_withdraw = models.DecimalField(max_digits=12, decimal_places=2, default=Decimal('20.00'))
     referral_commission_rate = models.DecimalField(max_digits=5, decimal_places=4, default=Decimal('0.12'))
     daily_bonus_amount = models.DecimalField(max_digits=12, decimal_places=2, default=Decimal('15.00'))
@@ -123,12 +123,12 @@ class UserProfile(models.Model):
 
     @property
     def total_referrals(self):
-        min_dep = SiteConfig.load().min_deposit or Decimal('100.00')
+        min_dep = SiteConfig.load().min_deposit or Decimal('50.00')
         return self.referrals.filter(total_deposit__gte=min_dep).count()
 
     @property
     def active_referrals(self):
-        min_dep = SiteConfig.load().min_deposit or Decimal('100.00')
+        min_dep = SiteConfig.load().min_deposit or Decimal('50.00')
         return self.referrals.filter(
             total_deposit__gte=min_dep,
             user__is_active=True,

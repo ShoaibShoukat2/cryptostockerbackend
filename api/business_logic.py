@@ -72,7 +72,7 @@ def get_referral_tier_requirements():
 
 def get_min_deposit_threshold():
     config = SiteConfig.load()
-    return config.min_deposit or Decimal(str(getattr(settings, 'MIN_DEPOSIT', 100)))
+    return config.min_deposit or Decimal(str(getattr(settings, 'MIN_DEPOSIT', 50)))
 
 
 def count_direct_members(profile):
