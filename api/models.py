@@ -27,7 +27,7 @@ class SiteConfig(models.Model):
     referral_commission_rate = models.DecimalField(max_digits=5, decimal_places=4, default=Decimal('0.12'))
     daily_bonus_amount = models.DecimalField(max_digits=12, decimal_places=2, default=Decimal('15.00'))
     daily_bonus_referrals = models.IntegerField(default=3)
-    investment_lock_days = models.IntegerField(default=7)
+    investment_lock_days = models.IntegerField(default=30)
     promotion_bonus_subtitle = models.CharField(
         max_length=255, blank=True, default='Upload videos and earn extra rewards',
     )

@@ -5,7 +5,9 @@ from django.conf import settings
 from django.db.models import Sum
 from django.utils import timezone
 
-from .models import UserProfile, InvestmentLock, Transaction, SiteConfig, Notification
+from .models import (
+    UserProfile, InvestmentLock, Transaction, SiteConfig, Notification, DailyReferralTracker,
+)
 
 REFERRAL_TIER_REQUIREMENTS = [
     {
@@ -97,10 +99,26 @@ def count_indirect_members(profile):
     ).count()
 
 
+def get_team_total_deposit(profile):
+    """Sum of total_deposit across direct and indirect team members."""
+    direct_ids = list(
+        UserProfile.objects.filter(referred_by=profile).values_list('pk', flat=True),
+    )
+    direct_sum = UserProfile.objects.filter(referred_by=profile).aggregate(
+        total=Sum('total_deposit'),
+    )['total'] or Decimal('0')
+    indirect_sum = Decimal('0')
+    if direct_ids:
+        indirect_sum = UserProfile.objects.filter(
+            referred_by_id__in=direct_ids,
+        ).aggregate(total=Sum('total_deposit'))['total'] or Decimal('0')
+    return direct_sum + indirect_sum
+
+
 def get_user_tier(profile):
     direct = count_direct_members(profile)
     indirect = count_indirect_members(profile)
-    deposit = profile.total_deposit
+    deposit = get_team_total_deposit(profile)
     tiers = get_referral_tier_requirements()
     matched = tiers[0]
     for tier in tiers:
@@ -141,7 +159,11 @@ def get_withdrawable_balance(profile):
 
 
 def create_investment_lock(user, amount):
-    days = int(getattr(settings, 'INVESTMENT_LOCK_DAYS', 7))
+    config = SiteConfig.load()
+    days = int(
+        config.investment_lock_days
+        or getattr(settings, 'INVESTMENT_LOCK_DAYS', 30),
+    )
     unlock_at = timezone.now() + timezone.timedelta(days=days)
     InvestmentLock.objects.create(user=user, amount=amount, unlock_at=unlock_at)
     profile = user.profile
@@ -149,27 +171,42 @@ def create_investment_lock(user, amount):
     profile.save(update_fields=['locked_investment'])
 
 
-def track_referral_deposit(referrer_profile):
-    """Award lifetime extra bonus when enough referrals deposit the minimum amount."""
-    if referrer_profile.extra_bonus_awarded:
-        return Decimal('0')
+def _get_today_bonus_tracker(referrer_profile):
+    today = timezone.localdate()
+    tracker, _ = DailyReferralTracker.objects.get_or_create(
+        user=referrer_profile.user,
+        date=today,
+        defaults={'referral_count': 0, 'bonus_awarded': False},
+    )
+    return tracker
 
+
+def track_referral_deposit(referrer_profile):
+    """Award daily extra bonus when enough referrals deposit within the same day."""
     config = SiteConfig.load()
     threshold = int(config.daily_bonus_referrals or getattr(settings, 'DAILY_BONUS_REFERRALS', 3))
     bonus_amount = config.daily_bonus_amount or Decimal(str(getattr(settings, 'DAILY_BONUS_AMOUNT', 15)))
     min_dep = get_min_deposit_threshold()
-    count = count_qualified_bonus_referrals(referrer_profile)
+    tracker = _get_today_bonus_tracker(referrer_profile)
 
-    referrer_profile.extra_bonus_qualified_count = count
+    tracker.referral_count += 1
+    tracker.save(update_fields=['referral_count'])
+
+    referrer_profile.extra_bonus_qualified_count = tracker.referral_count
     update_fields = ['extra_bonus_qualified_count']
 
-    if count >= threshold:
-        referrer_profile.extra_bonus_awarded = True
+    if tracker.bonus_awarded:
+        referrer_profile.save(update_fields=update_fields)
+        return Decimal('0')
+
+    if tracker.referral_count >= threshold:
+        tracker.bonus_awarded = True
+        tracker.save(update_fields=['bonus_awarded'])
         referrer_profile.available_balance += bonus_amount
         referrer_profile.total_balance += bonus_amount
         referrer_profile.total_referral_bonus += bonus_amount
         update_fields.extend([
-            'extra_bonus_awarded', 'available_balance', 'total_balance', 'total_referral_bonus',
+            'available_balance', 'total_balance', 'total_referral_bonus',
         ])
         referrer_profile.save(update_fields=update_fields)
         Transaction.objects.create(
@@ -177,7 +214,7 @@ def track_referral_deposit(referrer_profile):
             type='referral',
             amount=bonus_amount,
             description=(
-                f'Extra bonus: {threshold} referrals with ${min_dep:.0f}+ deposit (lifetime)'
+                f'Extra bonus: {threshold} referrals with ${min_dep:.0f}+ deposit today'
             ),
         )
         Notification.objects.create(
@@ -185,7 +222,7 @@ def track_referral_deposit(referrer_profile):
             title='Extra Bonus Earned',
             message=(
                 f'Congratulations! You earned ${bonus_amount:.2f} extra bonus for '
-                f'{threshold} referrals who deposited ${min_dep:.0f} or more.'
+                f'{threshold} referrals who deposited ${min_dep:.0f} or more today.'
             ),
             notification_type='bonus',
         )
@@ -217,8 +254,12 @@ def get_extra_bonus_status(profile):
     threshold = int(config.daily_bonus_referrals or getattr(settings, 'DAILY_BONUS_REFERRALS', 3))
     bonus_amount = float(config.daily_bonus_amount or getattr(settings, 'DAILY_BONUS_AMOUNT', 15))
     min_deposit = float(get_min_deposit_threshold())
-    count = count_qualified_bonus_referrals(profile)
-    awarded = profile.extra_bonus_awarded
+    tracker = DailyReferralTracker.objects.filter(
+        user=profile.user,
+        date=timezone.localdate(),
+    ).first()
+    count = tracker.referral_count if tracker else 0
+    awarded = tracker.bonus_awarded if tracker else False
     return {
         'referrals_today': count,
         'qualified_referrals': count,
@@ -237,6 +278,7 @@ get_daily_bonus_status = get_extra_bonus_status
 def build_tier_levels(profile):
     direct = count_direct_members(profile)
     indirect = count_indirect_members(profile)
+    team_deposit = get_team_total_deposit(profile)
     current = get_user_tier(profile)
     referral_earnings = float(
         Transaction.objects.filter(user=profile.user, type='referral').aggregate(
@@ -255,6 +297,7 @@ def build_tier_levels(profile):
             'direct_members': direct,
             'indirect_members': indirect,
             'user_deposit': float(profile.total_deposit),
+            'team_deposit': float(team_deposit),
             'unlocked': tier['level'] <= current['level'],
             'current': tier['level'] == current['level'],
             'earnings': referral_earnings if tier['level'] == 1 else 0,
